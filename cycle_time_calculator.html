@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>生產線 Cycle Time 計算器</title>
+<style>
+:root{--ink:#1d2939;--muted:#667085;--line:#e4e7ec;--blue:#3157d5;--blue2:#eef2ff;--bg:#f5f7fb;--green:#067647}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:Arial,"Noto Sans TC",sans-serif}
+main{max-width:1050px;margin:36px auto;padding:0 20px 48px}
+header{margin-bottom:24px}
+h1{font-size:clamp(25px,4vw,34px);margin:0 0 8px}
+.sub{color:var(--muted);line-height:1.7}
+.panel{background:#fff;border:1px solid var(--line);border-radius:16px;padding:22px;margin:16px 0;box-shadow:0 4px 18px rgba(16,24,40,.04)}
+.panel h2{font-size:18px;margin:0 0 16px}
+.upload{border:2px dashed #b9c5e8;background:#fafbff;border-radius:12px;padding:26px;text-align:center}
+input[type=file]{max-width:100%;margin:10px 0}
+.controls{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-top:16px}
+select,button{font:inherit;border-radius:9px;padding:10px 14px}
+select{border:1px solid var(--line);background:#fff;color:var(--ink)}
+button{border:0;background:var(--blue);color:#fff;cursor:pointer;font-weight:600}
+button.secondary{background:#eef2f6;color:#344054}
+button:disabled{opacity:.45;cursor:not-allowed}
+.hint{font-size:13px;color:var(--muted);line-height:1.6;margin:12px 0 0}
+.status{margin-top:12px;font-size:14px;color:var(--muted)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+.metric{background:#fbfcff;border:1px solid var(--line);border-radius:12px;padding:16px}
+.metric .label{font-size:13px;color:var(--muted);margin-bottom:8px}
+.metric .value{font-size:27px;font-weight:750;letter-spacing:-.5px}
+.metric .unit{font-size:13px;color:var(--muted);margin-left:4px}
+.metric.primary{background:var(--blue2);border-color:#dbe3ff}
+.metric.primary .value{color:var(--blue)}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:12px 10px;border-bottom:1px solid var(--line)}
+th{color:var(--muted);font-weight:600;background:#fafafa}
+tr:last-child td{border-bottom:0}
+.tag{display:inline-block;background:#ecfdf3;color:var(--green);padding:4px 8px;border-radius:20px;font-size:12px;font-weight:700}
+.note{background:#fffaeb;border:1px solid #fedf89;border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.65;color:#7a2e0e}
+.empty{color:var(--muted);text-align:center;padding:24px}
+.footer{font-size:12px;color:var(--muted);text-align:center;margin-top:24px}
+@media(max-width:600px){main{margin-top:22px}.panel{padding:16px;overflow-x:auto}.upload{padding:18px}.metric .value{font-size:24px}}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>生產線 Cycle Time 計算器</h1>
+  <div class="sub">上傳作業紀錄 CSV，自動計算各工作站平均 Cycle Time，以及整條生產線的瓶頸 Cycle Time。</div>
+</header>
+
+<section class="panel">
+  <h2>1. 上傳 CSV 檔案</h2>
+  <div class="upload">
+    <div><strong>選擇你的生產紀錄 CSV</strong></div>
+    <input id="fileInput" type="file" accept=".csv,text/csv">
+    <div class="hint">檔案需包含 <b>station_id</b> 與 <b>duration_sec</b> 欄位。支援 UTF-8 CSV。</div>
+  </div>
+  <div class="controls">
+    <label for="scope">計算資料範圍：</label>
+    <select id="scope">
+      <option value="last9" selected>最後 9 筆有效作業紀錄（3 次測試 × 3 個工作站）</option>
+      <option value="all">全部有效作業紀錄</option>
+    </select>
+    <button id="calculateBtn" disabled>重新計算</button>
+    <button id="downloadBtn" class="secondary" disabled>下載分析結果 CSV</button>
+  </div>
+  <div id="status" class="status">尚未上傳檔案。</div>
+</section>
+
+<section class="panel">
+  <h2>2. 計算結果</h2>
+  <div id="metrics" class="cards">
+    <div class="empty" style="grid-column:1/-1">上傳 CSV 後，這裡會顯示計算結果。</div>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>3. 各工作站 Cycle Time</h2>
+  <div id="stationTable" class="empty">等待資料計算</div>
+</section>
+
+<section class="panel">
+  <h2>4. 計算方式</h2>
+  <p><b>工作站 Cycle Time</b> = 該工作站作業時間總和 ÷ 該工作站有效作業筆數。</p>
+  <p><b>整條生產線 Cycle Time（瓶頸估算）</b> = 所有工作站平均 Cycle Time 中的最大值。</p>
+  <p><b>單件產品總加工時間（參考）</b> = 各工作站平均 Cycle Time 相加。這個數值與整條生產線的瓶頸 Cycle Time 不同。</p>
+  <div class="note">本工具會排除 duration_sec 或 station_id 空白、以及 status 欄位存在且不是 COMPLETED 的資料。若選擇「最後 9 筆」，會先依 CSV 原始順序篩選有效紀錄，再取最後 9 筆。</div>
+</section>
+<div class="footer">所有計算都在你的電腦瀏覽器內完成，CSV 不會上傳到網路伺服器。</div>
+</main>
+<script>
+let rawRows = [];
+let result = null;
+const fileInput = document.getElementById('fileInput');
+const scope = document.getElementById('scope');
+const calculateBtn = document.getElementById('calculateBtn');
+const downloadBtn = document.getElementById('downloadBtn');
+const statusEl = document.getElementById('status');
+
+function parseCSV(text){
+  const rows=[]; let row=[], field='', quoted=false;
+  for(let i=0;i<text.length;i++){
+    const c=text[i], next=text[i+1];
+    if(quoted){
+      if(c==='"' && next==='"'){field+='"';i++;}
+      else if(c==='"') quoted=false;
+      else field+=c;
+    }else{
+      if(c==='"') quoted=true;
+      else if(c===','){row.push(field);field='';}
+      else if(c==='\n'){row.push(field);rows.push(row);row=[];field='';}
+      else if(c!=='\r') field+=c;
+    }
+  }
+  row.push(field);
+  if(row.some(v=>v.trim()!=='')) rows.push(row);
+  if(!rows.length) return [];
+  const headers=rows.shift().map(h=>h.trim().replace(/^\uFEFF/,''));
+  return rows.map(values=>{
+    const obj={}; headers.forEach((h,i)=>obj[h]=(values[i]??'').trim()); return obj;
+  });
+}
+function escapeHTML(s){
+  return String(s).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+function csvCell(value){
+  const s=String(value??'');
+  return '"'+s.replace(/"/g,'""')+'"';
+}
+function calculate(){
+  const valid=rawRows.filter(r=>{
+    const station=(r.station_id||'').trim();
+    const duration=Number(r.duration_sec);
+    const status=(r.status||'').trim().toUpperCase();
+    return station!=='' && (r.duration_sec||'').trim()!=='' && Number.isFinite(duration) && duration>=0 && (!status || status==='COMPLETED');
+  });
+  const selected=scope.value==='last9'?valid.slice(-9):valid;
+  if(!selected.length){statusEl.textContent='找不到有效作業紀錄，請確認 CSV 欄位與內容。';return;}
+  const grouped={};
+  selected.forEach(r=>{
+    const station=r.station_id.trim();
+    if(!grouped[station]) grouped[station]={count:0,total:0,times:[]};
+    const d=Number(r.duration_sec);
+    grouped[station].count++;grouped[station].total+=d;grouped[station].times.push(d);
+  });
+  const stations=Object.entries(grouped).map(([name,v])=>({
+    name,count:v.count,total:v.total,ct:v.total/v.count
+  })).sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}));
+  const lineCT=Math.max(...stations.map(s=>s.ct));
+  const bottlenecks=stations.filter(s=>Math.abs(s.ct-lineCT)<1e-9).map(s=>s.name);
+  const totalProcessing=stations.reduce((sum,s)=>sum+s.ct,0);
+  result={stations,lineCT,totalProcessing,bottlenecks,selected,validCount:valid.length};
+  render();
+}
+function render(){
+  const {stations,lineCT,totalProcessing,bottlenecks,selected}=result;
+  document.getElementById('metrics').innerHTML=`
+    <div class="metric primary"><div class="label">整條生產線 Cycle Time（瓶頸）</div><span class="value">${lineCT.toFixed(2)}</span><span class="unit">秒／件</span></div>
+    <div class="metric"><div class="label">單件產品總加工時間（參考）</div><span class="value">${totalProcessing.toFixed(2)}</span><span class="unit">秒／件</span></div>
+    <div class="metric"><div class="label">本次納入計算的紀錄</div><span class="value">${selected.length}</span><span class="unit">筆</span></div>
+    <div class="metric"><div class="label">工作站數量</div><span class="value">${stations.length}</span><span class="unit">站</span></div>`;
+  document.getElementById('stationTable').innerHTML=`
+    <table><thead><tr><th>工作站</th><th>作業筆數</th><th>總作業時間（秒）</th><th>平均 Cycle Time（秒）</th><th>狀態</th></tr></thead>
+    <tbody>${stations.map(s=>`<tr><td><b>${escapeHTML(s.name)}</b></td><td>${s.count}</td><td>${s.total.toFixed(2)}</td><td><b>${s.ct.toFixed(2)}</b></td><td>${bottlenecks.includes(s.name)?'<span class="tag">瓶頸工作站</span>':'—'}</td></tr>`).join('')}</tbody></table>`;
+  statusEl.textContent=`計算完成：從 ${result.validCount} 筆有效紀錄中，依目前設定納入 ${selected.length} 筆。瓶頸工作站：${bottlenecks.join('、')}。`;
+  downloadBtn.disabled=false;
+}
+fileInput.addEventListener('change',async e=>{
+  const file=e.target.files[0]; if(!file)return;
+  try{
+    let text=await file.text();
+    if(text.includes('�')){statusEl.textContent='檔案可能不是 UTF-8 編碼，請另存為 UTF-8 CSV 後再上傳。';return;}
+    rawRows=parseCSV(text);
+    if(!rawRows.length || !('station_id' in rawRows[0]) || !('duration_sec' in rawRows[0])){
+      statusEl.textContent='CSV 欄位不符合需求：請確認包含 station_id、duration_sec。';calculateBtn.disabled=true;return;
+    }
+    calculateBtn.disabled=false;
+    statusEl.textContent=`已讀取「${file.name}」，共 ${rawRows.length} 筆資料。`;
+    calculate();
+  }catch(err){statusEl.textContent='讀取失敗，請確認檔案格式。';}
+});
+calculateBtn.addEventListener('click',calculate);
+scope.addEventListener('change',()=>{if(rawRows.length)calculate();});
+downloadBtn.addEventListener('click',()=>{
+  if(!result)return;
+  const rows=[
+    ['類別','工作站','作業筆數','總作業時間(秒)','Cycle Time(秒)'],
+    ...result.stations.map(s=>['工作站',s.name,s.count,s.total.toFixed(2),s.ct.toFixed(2)]),
+    ['整條生產線','瓶頸 Cycle Time', '', '', result.lineCT.toFixed(2)],
+    ['參考數值','單件產品總加工時間','','',result.totalProcessing.toFixed(2)]
+  ];
+  const csv='\uFEFF'+rows.map(r=>r.map(csvCell).join(',')).join('\r\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);const a=document.createElement('a');
+  a.href=url;a.download='cycle_time_analysis.csv';document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
+});
+</script>
+</body>
+</html>
